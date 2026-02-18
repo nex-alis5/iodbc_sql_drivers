@@ -1,0 +1,9 @@
+/build
+*.so
+*.o
+*.a
+*.tar
+*.tar.*
+*.zip
+*.la
+*.lo

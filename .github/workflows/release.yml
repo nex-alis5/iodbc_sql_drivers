@@ -1,0 +1,111 @@
+on:
+  push:
+    tags: "*"
+
+permissions:
+  contents: write
+
+jobs:
+  build_linux_x86_64:
+    name: "build linux x86_64"
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: install
+        id: install
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+          cmake patchelf \
+          ninja-build  \
+          python3 \
+          build-essential \
+          pkg-config \
+          git \
+          libssl-dev \
+          libmbedtls-dev \
+          gperf \
+          postgresql \
+          autoconf \
+          libtool \
+          gettext \
+          libpq-dev \
+          bison \
+          flex \
+          libcurl4-openssl-dev
+
+      - name: refname
+        id: refname
+        run: |
+            RAW="${{ github.ref_name || github.head_ref }}"
+            SAFE=$(echo "$RAW" | tr '[:upper:]' '[:lower:]' | sed -E 's#[^a-z0-9._-]+#-#g' | sed -E 's#^-+|-+$##g')
+            echo "REFN=iodbc_sql_drivers-${SAFE}-`gcc -dumpmachine`" >> $GITHUB_ENV
+            echo "REFN=iodbc_sql_drivers-${SAFE}-`gcc -dumpmachine`"
+
+      - name: configure
+        id: configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="/opt/${REFN}"
+
+      - name: build
+        id: build
+        run: cmake --build build -j
+
+      - name: Install (CMake)
+        run: cmake --install build
+
+      - name: archive
+        id: archive
+        env:
+          BNAME: ${{ steps.refname.outputs.ref }}
+        run: |
+          tar -cpvzf ${REFN}.tar.gz /opt/${REFN}
+          sha256sum ${REFN}.tar.gz > "${REFN}.tar.gz.sha256"
+          cat ${REFN}.tar.gz.sha256
+
+      - name: Upload installed tree as artifact
+        uses: actions/upload-artifact@main
+        with:
+          name: ${{ env.REFN }}
+          path: |
+            iodbc_sql_drivers-*.tar.gz
+            iodbc_sql_drivers-*.sha256
+
+  release:
+    name: "release"
+    needs: build_linux_x86_64
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (for metadata)
+        uses: actions/checkout@v4
+
+      - name: refname
+        id: refname
+        run: |
+            RAW="${{ github.ref_name || github.head_ref }}"
+            SAFE=$(echo "$RAW" | tr '[:upper:]' '[:lower:]' | sed -E 's#[^a-z0-9._-]+#-#g' | sed -E 's#^-+|-+$##g')
+            echo "REFN=iodbc_sql_drivers-${SAFE}" >> $GITHUB_ENV
+            echo "REFN=iodbc_sql_drivers-${SAFE}"
+
+      - name: mkdir
+        id: mkdir
+        run: mkdir dist
+
+      - name: download x64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          name: ${{ env.REFN }}-x86_64-linux-gnu
+
+      - name: Create GitHub Release and upload asset (gh)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --generate-notes
+          for x in dist/*; do
+              gh release upload "$TAG" "$x" --clobber
+          done
